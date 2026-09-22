@@ -1,0 +1,24 @@
+import { Router } from "express";
+import { requireAdminOrCallCenter, requireAdminPanelAccess, requireSuperAdmin } from "../middleware/auth.middleware.js";
+import {
+  createUser,
+  listUsers,
+  getMyAdminAccess,
+  getRoles,
+  getTypes,
+  updateUserType,
+  deleteProviderUser,
+} from "../controllers/admin.controller.js";
+
+const router = Router();
+
+router.post("/users", requireSuperAdmin, createUser);
+router.post("/users/provider", requireAdminOrCallCenter, createUser);
+router.get("/users", requireAdminOrCallCenter, listUsers);
+router.delete("/users/:id/provider", requireAdminOrCallCenter, deleteProviderUser);
+router.get("/me/access", requireAdminPanelAccess, getMyAdminAccess);
+router.get("/roles", requireSuperAdmin, getRoles);
+router.get("/types", requireSuperAdmin, getTypes);
+router.patch("/users/:id/type", requireSuperAdmin, updateUserType);
+
+export default router;

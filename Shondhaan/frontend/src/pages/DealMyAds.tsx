@@ -1,0 +1,411 @@
+import { useState, useEffect } from "react";
+import ListingImage from "@/components/deal/ListingImage";
+import { useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronLeft, Plus, Eye, MessageSquare, Heart, Edit, Trash2, Loader2, Package, Clock, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
+import Navbar from "@/components/Navbar";
+import BackToHomeButton from "@/components/BackToHomeButton";
+
+const DEAL_API_BASE_URL = (
+  import.meta.env.VITE_DEAL_API_BASE_URL || "VITE_DEAL_API_BASE_URL"
+).replace(/\/+$/, "");
+
+interface DealListing {
+  id: string;
+  user_id?: string | null; 
+  title: string;
+  price: number;
+  status: string | null;
+  condition: string | null;
+  images: any;
+  views_count: number | null;
+  inquiries_count: number | null;
+  location_division: string | null;
+  location_district: string | null;
+  location_area: string | null;
+  created_at: string | null;
+  is_featured: boolean | null;
+  category: { name: string; icon: string | null } | null;
+}
+
+const extractListings = (payload: any): any[] => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.listings)) return payload.listings;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  return [];
+};
+
+const normalizeImages = (images: any): string[] => {
+  if (Array.isArray(images)) return images.filter(Boolean).map(String);
+
+  if (typeof images === "string") {
+    try {
+      const parsed = JSON.parse(images);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
+    } catch {
+      return images
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+};
+
+const normalizeListing = (listing: any): DealListing => ({
+  id: String(listing.id),
+  user_id: listing.user_id ? String(listing.user_id) : null, 
+  title: listing.title || "",
+  price: Number(listing.price || 0),
+  status: listing.status || "active",
+  condition: listing.condition || listing.product_condition || null,
+  images: normalizeImages(listing.images),
+  views_count: Number(listing.views_count || 0),
+  inquiries_count: Number(listing.inquiries_count || 0),
+  location_division: listing.location_division ?? null,
+  location_district: listing.location_district ?? null,
+  location_area: listing.location_area ?? null,
+  created_at: listing.created_at ?? null,
+  is_featured:
+    listing.is_featured === true ||
+    listing.is_featured === 1 ||
+    listing.is_featured === "1" ||
+    listing.is_featured === "true",
+  category: listing.category
+    ? {
+        name: listing.category.name || listing.category_name || "",
+        icon: listing.category.icon ?? listing.category_icon ?? null,
+      }
+    : listing.deal_categories
+      ? {
+          name: listing.deal_categories.name || "",
+          icon: listing.deal_categories.icon ?? null,
+        }
+      : listing.category_name
+        ? {
+            name: listing.category_name,
+            icon: listing.category_icon ?? null,
+          }
+        : null,
+});
+
+const DealMyAds = () => {
+  const navigate = useNavigate();
+  const { language } = useLanguage();
+  const bn = language === "bn";
+  const { user, loading: authLoading } = useAuth();
+
+  const [listings, setListings] = useState<DealListing[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("all");
+
+  useEffect(() => {
+    if (!authLoading && !user) navigate("/login", { replace: true });
+  }, [user, authLoading, navigate]);
+
+  useEffect(() => {
+    if (user) fetchListings();
+  }, [user]);
+
+  const getLoggedInUserId = () => {
+    const authUser = user as any;
+    const userId = String(
+      authUser?.id ||
+        authUser?.user_id ||
+        authUser?.user?.id ||
+        authUser?.user?.user_id ||
+        ""
+    );
+    
+    // LOG 1: Check what ID we are extracting from the AuthContext
+    console.log("[DealMyAds] Logged in user object:", authUser);
+    console.log("[DealMyAds] Extracted Logged-in User ID:", userId);
+    
+    return userId;
+  };
+
+  const fetchListings = async () => {
+    const userId = getLoggedInUserId();
+    if (!userId) return;
+
+    setLoading(true);
+
+    try {
+      const params = new URLSearchParams({ user_id: userId, mine: "1" });
+      const response = await fetch(
+        `${DEAL_API_BASE_URL}/api/deal/listings?${params.toString()}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      const payload = await response.json().catch(() => null);
+
+      // LOG 2: Check what the backend is actually returning
+      console.log("[DealMyAds] API Raw Payload for listings:", payload);
+
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.message || payload?.error || "Failed to load ads");
+      }
+
+      const rows = extractListings(payload);
+      const hasUserIds = rows.some((listing) => listing.user_id !== undefined && listing.user_id !== null);
+      const ownListings = rows
+        .filter((listing) => !hasUserIds || String(listing.user_id) === userId)
+        .map(normalizeListing);
+
+      // LOG 3: Check what the normalized listings look like (specifically user_id)
+      console.log("[DealMyAds] Normalized Listings being set to state:", ownListings);
+
+      setListings(ownListings);
+    } catch (error) {
+      console.error("Fetch my deal ads error:", error);
+      toast.error(bn ? "বিজ্ঞাপন লোড করতে সমস্যা" : "Failed to load ads");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    const userId = getLoggedInUserId();
+    if (!userId) return;
+
+    setDeletingId(id);
+
+    try {
+      const response = await fetch(`${DEAL_API_BASE_URL}/api/deal/listings/${id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ user_id: userId }),
+      });
+
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.message || payload?.error || "Failed to delete");
+      }
+
+      toast.success(bn ? "বিজ্ঞাপন মুছে ফেলা হয়েছে" : "Ad deleted");
+      setListings(prev => prev.filter(l => l.id !== id));
+    } catch (error: any) {
+      console.error("Delete deal ad error:", error);
+      toast.error(error?.message || (bn ? "মুছতে সমস্যা হয়েছে" : "Failed to delete"));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+  
+  const getStatusConfig = (status: string | null) => {
+    switch (status) {
+      case "active": return { label: bn ? "সক্রিয়" : "Active", icon: CheckCircle, color: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" };
+      case "sold": return { label: bn ? "বিক্রিত" : "Sold", icon: Package, color: "bg-primary/10 text-primary border-primary/20" };
+      case "inactive": return { label: bn ? "নিষ্ক্রিয়" : "Inactive", icon: XCircle, color: "bg-red-500/10 text-red-600 border-red-500/20" };
+      case "pending": return { label: bn ? "অপেক্ষমান" : "Pending", icon: Clock, color: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20" };
+      default: return { label: bn ? "সক্রিয়" : "Active", icon: CheckCircle, color: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" };
+    }
+  };
+
+  const filteredListings = activeTab === "all" ? listings : listings.filter(l => (l.status || "active") === activeTab);
+
+  const stats = {
+    all: listings.length,
+    active: listings.filter(l => !l.status || l.status === "active").length,
+    sold: listings.filter(l => l.status === "sold").length,
+    inactive: listings.filter(l => l.status === "inactive").length,
+  };
+  const formatDate = (d: string | null) => {
+    if (!d) return "";
+    return new Date(d).toLocaleDateString("bn-BD", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const getFirstImage = (images: any) => {
+    if (Array.isArray(images) && images.length > 0) return images[0];
+    return null;
+  };
+
+  // Helper function to handle edit click and log the data
+  const handleEditClick = (listing: DealListing) => {
+    const currentUserId = getLoggedInUserId();
+    
+    // LOG 4: Check exactly what is being compared when Edit is clicked
+    console.log(`[DealMyAds] Edit Clicked! 
+      Listing ID: ${listing.id}
+      Listing's user_id from state: ${listing.user_id} (Type: ${typeof listing.user_id})
+      Logged-in user_id: ${currentUserId} (Type: ${typeof currentUserId})
+      Do they match? ${String(listing.user_id) === String(currentUserId)}
+    `);
+
+    navigate(`/deal/edit/${listing.id}`);
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="pt-[24px] md:pt-[48px]" />
+      {/* <BackToHomeButton /> */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-6xl mx-auto ">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/deal")}><ChevronLeft className="h-5 w-5" /></Button>
+            <h1 className="text-xl font-bold text-foreground">{bn ? "আমার বিজ্ঞাপন" : "My Ads"}</h1>
+          </div>
+          <Button size="sm" onClick={() => navigate("/deal/post")} className="gap-1.5 rounded-xl">
+            <Plus className="h-4 w-4" />
+            {bn ? "নতুন বিজ্ঞাপন" : "New Ad"}
+          </Button>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-4 gap-2 mb-5">
+          {[
+            { key: "all", label: bn ? "সব" : "All", count: stats.all, color: "text-foreground" },
+            { key: "active", label: bn ? "সক্রিয়" : "Active", count: stats.active, color: "text-emerald-600" },
+            { key: "sold", label: bn ? "বিক্রিত" : "Sold", count: stats.sold, color: "text-primary" },
+            { key: "inactive", label: bn ? "নিষ্ক্রিয়" : "Off", count: stats.inactive, color: "text-red-600" },
+          ].map(s => (
+            <button
+              key={s.key}
+              onClick={() => setActiveTab(s.key)}
+              className={`rounded-xl border p-2.5 text-center transition-all ${activeTab === s.key ? "border-primary bg-primary/5 shadow-sm" : "border-border/50 bg-card hover:bg-muted/50"}`}
+            >
+              <p className={`text-xl font-bold ${s.color}`}>{s.count}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{s.label}</p>
+            </button>
+          ))}
+        </div>
+
+        {/* Listings */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : filteredListings.length === 0 ? (
+          <div className="text-center py-16">
+            <Package className="h-16 w-16 text-muted-foreground/30 mx-auto mb-4" />
+            <p className="text-lg font-medium text-muted-foreground">{bn ? "কোনো বিজ্ঞাপন নেই" : "No ads found"}</p>
+            <p className="text-sm text-muted-foreground/70 mt-1 mb-4">{bn ? "আপনার প্রথম বিজ্ঞাপন পোস্ট করুন" : "Post your first ad"}</p>
+            <Button onClick={() => navigate("/deal/post")} className="gap-1.5 rounded-xl">
+              <Plus className="h-4 w-4" /> {bn ? "বিজ্ঞাপন দিন" : "Post Ad"}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <AnimatePresence>
+              {filteredListings.map((listing, i) => {
+                const statusConfig = getStatusConfig(listing.status);
+                const StatusIcon = statusConfig.icon;
+                const img = getFirstImage(listing.images);
+
+                return (
+                  <motion.div
+                    key={listing.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -50 }}
+                    transition={{ delay: i * 0.05 }}
+                  >
+                    <Card className="overflow-hidden border-border/50 hover:shadow-md transition-shadow">
+                      <div className="flex gap-3 p-3">
+                        {/* Image */}
+                        <div
+                          className="w-24 h-24 rounded-lg bg-muted shrink-0 overflow-hidden cursor-pointer"
+                          onClick={() => navigate(`/deal/ad/${listing.id}`)}
+                        >
+                          <ListingImage src={img} alt={listing.title} fallbackSize="sm" />
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3
+                              className="font-semibold text-sm text-foreground line-clamp-1 cursor-pointer hover:text-primary transition-colors"
+                              onClick={() => navigate(`/deal/ad/${listing.id}`)}
+                            >
+                              {listing.title}
+                            </h3>
+                            <Badge variant="outline" className={`text-[10px] shrink-0 ${statusConfig.color}`}>
+                              <StatusIcon className="h-3 w-3 mr-0.5" />
+                              {statusConfig.label}
+                            </Badge>
+                          </div>
+
+                          <p className="text-base font-bold text-primary mt-1">৳{listing.price.toLocaleString("bn-BD")}</p>
+
+                          <div className="flex items-center gap-3 mt-1.5 text-[11px] text-muted-foreground">
+                            <span className="flex items-center gap-0.5"><Eye className="h-3 w-3" /> {listing.views_count || 0}</span>
+                            <span className="flex items-center gap-0.5"><MessageSquare className="h-3 w-3" /> {listing.inquiries_count || 0}</span>
+                            <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" /> {formatDate(listing.created_at)}</span>
+                          </div>
+
+                          {(listing.location_division || listing.location_district) && (
+                            <p className="text-[11px] text-muted-foreground mt-1 truncate">
+                              📍 {[listing.location_area, listing.location_district, listing.location_division].filter(Boolean).join(", ")}
+                            </p>
+                          )}
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-1.5 mt-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs gap-1 rounded-lg"
+                              onClick={() => handleEditClick(listing)} // <-- Updated to trigger logs
+                            >
+                              <Edit className="h-3 w-3" /> {bn ? "সম্পাদনা" : "Edit"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs gap-1 rounded-lg"
+                              onClick={() => navigate(`/deal/ad/${listing.id}`)}
+                            >
+                              <Eye className="h-3 w-3" /> {bn ? "দেখুন" : "View"}
+                            </Button>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button variant="outline" size="sm" className="h-7 text-xs gap-1 rounded-lg text-destructive hover:text-destructive">
+                                  {deletingId === listing.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>{bn ? "বিজ্ঞাপন মুছে ফেলবেন?" : "Delete this ad?"}</AlertDialogTitle>
+                                  <AlertDialogDescription>{bn ? "এটি স্থায়ীভাবে মুছে যাবে।" : "This action cannot be undone."}</AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>{bn ? "না" : "Cancel"}</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleDelete(listing.id)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                    {bn ? "হ্যাঁ, মুছুন" : "Delete"}
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+        )}
+      </motion.div>
+    </div>
+  );
+};
+
+export default DealMyAds;
